@@ -1,0 +1,44 @@
+{
+  "version": "0.1.0",
+  "license": "MIT",
+  "main": "dist/index.js",
+  "typings": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "start": "tsdx watch",
+    "build": "tsdx build",
+    "test": "tsdx test",
+    "lint": "tsdx lint",
+    "prepare": "tsdx build"
+  },
+  "peerDependencies": {},
+  "husky": {
+    "hooks": {
+      "pre-commit": "tsdx lint"
+    }
+  },
+  "prettier": {
+    "printWidth": 80,
+    "semi": true,
+    "singleQuote": true,
+    "trailingComma": "es5"
+  },
+  "name": "avro-flow-codegen",
+  "author": "Ben Robinson",
+  "module": "dist/avro-flow-codegen.esm.js",
+  "devDependencies": {
+    "@types/jest": "^25.1.4",
+    "@types/prettier": "^1.19.0",
+    "husky": "^4.2.3",
+    "tsdx": "^0.12.3",
+    "tslib": "^1.11.1",
+    "typescript": "^3.8.3"
+  },
+  "dependencies": {
+    "@babel/generator": "^7.8.7",
+    "@babel/parser": "^7.8.7",
+    "@babel/types": "^7.8.7"
+  }
+}
