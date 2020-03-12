@@ -1,13 +1,21 @@
 import generate from '@babel/generator';
 import * as t from '@babel/types';
 
+const createTypeName = (names: ReadonlyArray<string>): string => {
+  return names
+    .map(name => name.replace(' ', '_').replace('_', ''))
+    .map(capitaliseFirstLetter)
+    .map(s => s.replace(' ', ''))
+    .join('_');
+};
+
 const capitaliseFirstLetter = (str: string): string => {
   return str.charAt(0).toUpperCase() + str.slice(1);
 };
 
 class Context {
   namedTypesByName = new Map<string, t.FlowType>();
-  allTypes: Array<[ReadonlyArray<string>, t.FlowType]> = [];
+  allTypes: Array<[string, t.FlowType]> = [];
   addName(name: string, type: t.FlowType) {
     if (this.namedTypesByName.has(name)) {
       throw new Error(`The named type ${name} has already been declared`);
@@ -22,8 +30,8 @@ class Context {
     return namedType;
   }
 
-  addType(names: ReadonlyArray<string>, newType: t.FlowType) {
-    this.allTypes.push([names, newType]);
+  addType(name: string, newType: t.FlowType) {
+    this.allTypes.push([name, newType]);
   }
 }
 
@@ -84,16 +92,7 @@ export const parseFile = (name: string, avscText: string): string => {
     t.program(
       context.allTypes.map(([names, flowType]) =>
         t.exportNamedDeclaration(
-          t.typeAlias(
-            t.identifier(
-              names
-                .map(capitaliseFirstLetter)
-                .map(s => s.replace(' ', ''))
-                .join('')
-            ),
-            null,
-            flowType
-          )
+          t.typeAlias(t.identifier(names), null, flowType)
         )
       ),
       undefined,
@@ -103,7 +102,8 @@ export const parseFile = (name: string, avscText: string): string => {
     null,
     null
   );
-  return generate(file).code;
+  // lol
+  return '// @flow\n\n' + generate(file).code;
 };
 
 const parseAvroRecord: Parser<AvroRecord> = (
@@ -187,21 +187,24 @@ const parseAvroType: Parser<AvroType> = (avro, names, context) => {
   return handleAvroType(avro, {
     primitive: parseAvroPrimitiveType,
     union: a => {
+      const typeName = createTypeName([...names, 'Union']);
       const parsed = parseAvroUnionType(a, names, context);
-      context.addType([...names, 'Union'], parsed);
-      return parsed;
+      context.addType(typeName, parsed);
+      return t.genericTypeAnnotation(t.identifier(typeName));
     },
     record: a => {
+      const typeName = createTypeName([...names, a.name]);
       const parsed = parseAvroRecord(a, names, context);
-      context.addType([...names, a.name], parsed);
-      return parsed;
+      context.addType(typeName, parsed);
+      return t.genericTypeAnnotation(t.identifier(typeName));
     },
     array: a => parseAvroArray(a, names, context),
     custom: a => parseAvroCustomType(a, context),
     enum: a => {
+      const typeName = createTypeName([...names, a.name]);
       const parsed = parseAvroEnum(a, names, context);
-      context.addType([...names, a.name], parsed);
-      return parsed;
+      context.addType(typeName, parsed);
+      return t.genericTypeAnnotation(t.identifier(typeName));
     },
   });
 };
