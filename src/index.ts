@@ -1,21 +1,49 @@
 import generate from '@babel/generator';
 import * as t from '@babel/types';
 
-type AvroPrimitiveType =
-  | 'null'
-  | 'boolean'
-  | 'int'
-  | 'long'
-  | 'float'
-  | 'double'
-  | 'bytes'
-  | 'string';
+class Context {
+  namedTypesByName = new Map<string, t.FlowType>();
+  addName(name: string, type: t.FlowType) {
+    if (this.namedTypesByName.has(name)) {
+      throw new Error(`The named type ${name} has already been declared`);
+    }
+    this.namedTypesByName.set(name, type);
+  }
+  getName(name: string): t.FlowType {
+    const namedType = this.namedTypesByName.get(name);
+    if (namedType == null) {
+      throw new Error(`Named type ${name} has not been declared`);
+    }
+    return namedType;
+  }
+}
+
+enum AvroPrimitiveType {
+  NULL = 'null',
+  BOOLEAN = 'boolean',
+  INT = 'int',
+  LONG = 'long',
+  FLOAT = 'float',
+  DOUBLE = 'double',
+  BYTES = 'bytes',
+  STRING = 'string',
+}
+
+const AllAvroPrimitiveTypes = new Set(Object.values(AvroPrimitiveType));
 
 type AvroPrimitive = AvroPrimitiveType | { type: AvroPrimitiveType };
 
-type AvroType = AvroPrimitive | AvroComplex;
+type CustomType = string;
 
-type AvroComplex = AvroRecord | AvroArray | AvroUnion;
+type AvroType = AvroPrimitive | AvroComplex | CustomType;
+
+type AvroComplex = AvroRecord | AvroArray | AvroUnion | AvroEnum;
+
+interface AvroEnum {
+  type: 'enum';
+  name: string;
+  symbols: Array<string>;
+}
 
 interface AvroRecord {
   type: 'record';
@@ -38,17 +66,22 @@ export const generateFile = (name: string, avscText: string): string => {
   if (avscJson.type !== 'record') {
     throw new Error('Expected top level to be record');
   }
+  const context = new Context();
   const topRecord: AvroRecord = avscJson;
-  const ast = t.typeAlias(t.identifier(name), null, parseAvroRecord(topRecord));
+  const ast = t.typeAlias(
+    t.identifier(name),
+    null,
+    parseAvroRecord(topRecord, context)
+  );
   return generate(ast).code;
 };
 
-const parseAvroRecord = (avro: AvroRecord): t.FlowType => {
-  return t.objectTypeAnnotation(
+const parseAvroRecord = (avro: AvroRecord, context: Context): t.FlowType => {
+  const record = t.objectTypeAnnotation(
     avro.fields.map(field => {
       return t.objectTypeProperty(
         t.stringLiteral(field.name),
-        parseAvroType(field.type)
+        parseAvroType(field.type, context)
       );
     }),
     null,
@@ -56,10 +89,12 @@ const parseAvroRecord = (avro: AvroRecord): t.FlowType => {
     null,
     true
   );
+  context.addName(avro.name, record);
+  return record;
 };
 
-const parseAvroArray = (avro: AvroArray): t.FlowType => {
-  return t.arrayTypeAnnotation(parseAvroType(avro.items));
+const parseAvroArray = (avro: AvroArray, context: Context): t.FlowType => {
+  return t.arrayTypeAnnotation(parseAvroType(avro.items, context));
 };
 
 interface AvroTypeHandlersMap<T> {
@@ -67,6 +102,8 @@ interface AvroTypeHandlersMap<T> {
   array: (_: AvroArray) => T;
   record: (_: AvroRecord) => T;
   union: (_: AvroUnion) => T;
+  custom: (_: CustomType) => T;
+  enum: (_: AvroEnum) => T;
 }
 
 const handleAvroType = <T>(
@@ -74,7 +111,15 @@ const handleAvroType = <T>(
   handlersMap: AvroTypeHandlersMap<T>
 ): T => {
   if (typeof avro === 'string') {
-    return handlersMap.primitive(avro);
+    // @ts-ignore
+    if (AllAvroPrimitiveTypes.has(avro)) {
+      // @ts-ignore
+      const prim: AvroPrimitiveType = avro;
+      return handlersMap.primitive(prim);
+    } else {
+      // Must be a custom type
+      return handlersMap.custom(avro);
+    }
   } else if (Array.isArray(avro)) {
     return handlersMap.union(avro);
   }
@@ -83,45 +128,72 @@ const handleAvroType = <T>(
       return handlersMap.record(avro);
     case 'array':
       return handlersMap.array(avro);
+    case 'enum':
+      return handlersMap.enum(avro);
     default:
       // Must be a primitive or custom type
       return handlersMap.primitive(avro.type);
   }
 };
 
-const parseAvroType = (avro: AvroType): t.FlowType => {
+const parseAvroEnum = (avro: AvroEnum, context: Context): t.FlowType => {
+  const enumType = t.unionTypeAnnotation(
+    avro.symbols.map(symbol => t.stringLiteralTypeAnnotation(symbol))
+  );
+  context.addName(avro.name, enumType);
+  return enumType;
+};
+
+const parseAvroType = (avro: AvroType, context: Context): t.FlowType => {
   return handleAvroType(avro, {
     primitive: parseAvroPrimitiveType,
-    union: parseAvroUnionType,
-    record: parseAvroRecord,
-    array: parseAvroArray,
+    union: a => parseAvroUnionType(a, context),
+    record: a => parseAvroRecord(a, context),
+    array: a => parseAvroArray(a, context),
+    custom: a => parseAvroCustomType(a, context),
+    enum: a => parseAvroEnum(a, context),
   });
 };
+
+const parseAvroCustomType = (
+  typeName: CustomType,
+  context: Context
+): t.FlowType => {
+  const customType = context.getName(typeName);
+  if (customType == null) {
+    throw new Error(`Could not find definition for custom type ${typeName}`);
+  }
+  return customType;
+};
+
 const parseAvroPrimitiveType = (pt: AvroPrimitiveType): t.FlowType => {
   switch (pt) {
-    case 'null':
+    case AvroPrimitiveType.NULL:
       return t.nullLiteralTypeAnnotation();
-    case 'boolean':
+    case AvroPrimitiveType.BOOLEAN:
       return t.booleanTypeAnnotation();
-    case 'int':
+    case AvroPrimitiveType.INT:
       return t.numberTypeAnnotation();
-    case 'long':
+    case AvroPrimitiveType.LONG:
       return t.numberTypeAnnotation();
-    case 'float':
+    case AvroPrimitiveType.FLOAT:
       return t.numberTypeAnnotation();
-    case 'double':
+    case AvroPrimitiveType.DOUBLE:
       return t.numberTypeAnnotation();
-    case 'bytes':
+    case AvroPrimitiveType.BYTES:
       throw new Error("Can't handle bytes");
-    case 'string':
+    case AvroPrimitiveType.STRING:
       return t.stringTypeAnnotation();
   }
 };
 
-const parseAvroUnionType = (unionTypes: AvroUnion): t.FlowType => {
+const parseAvroUnionType = (
+  unionTypes: AvroUnion,
+  context: Context
+): t.FlowType => {
   return t.unionTypeAnnotation(
     unionTypes.map(unionType => {
-      const flowType = parseAvroType(unionType);
+      const flowType = parseAvroType(unionType, context);
       const tag = tagForUnionBranch(unionType);
       if (tag == null) {
         return flowType;
@@ -153,5 +225,7 @@ const tagForUnionBranch = (avro: AvroType): null | string => {
     array: () => {
       throw new Error('is this even possible?');
     },
+    custom: s => s,
+    ['enum']: s => s.name,
   });
 };
