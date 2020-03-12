@@ -1,8 +1,13 @@
 import generate from '@babel/generator';
 import * as t from '@babel/types';
 
+const capitaliseFirstLetter = (str: string): string => {
+  return str.charAt(0).toUpperCase() + str.slice(1);
+};
+
 class Context {
   namedTypesByName = new Map<string, t.FlowType>();
+  allTypes: Array<[ReadonlyArray<string>, t.FlowType]> = [];
   addName(name: string, type: t.FlowType) {
     if (this.namedTypesByName.has(name)) {
       throw new Error(`The named type ${name} has already been declared`);
@@ -15,6 +20,10 @@ class Context {
       throw new Error(`Named type ${name} has not been declared`);
     }
     return namedType;
+  }
+
+  addType(names: ReadonlyArray<string>, newType: t.FlowType) {
+    this.allTypes.push([names, newType]);
   }
 }
 
@@ -61,28 +70,54 @@ interface AvroArray {
 }
 type AvroUnion = Array<AvroType>;
 
-export const generateFile = (name: string, avscText: string): string => {
-  const avscJson = JSON.parse(avscText);
-  if (avscJson.type !== 'record') {
-    throw new Error('Expected top level to be record');
-  }
+type Parser<T> = (
+  a: T,
+  names: ReadonlyArray<string>,
+  context: Context
+) => t.FlowType;
+
+export const parseFile = (name: string, avscText: string): string => {
+  const avro: AvroType = JSON.parse(avscText);
   const context = new Context();
-  const topRecord: AvroRecord = avscJson;
-  const ast = t.typeAlias(
-    t.identifier(name),
+  parseAvroType(avro, [name], context);
+  const file = t.file(
+    t.program(
+      context.allTypes.map(([names, flowType]) =>
+        t.exportNamedDeclaration(
+          t.typeAlias(
+            t.identifier(
+              names
+                .map(capitaliseFirstLetter)
+                .map(s => s.replace(' ', ''))
+                .join('')
+            ),
+            null,
+            flowType
+          )
+        )
+      ),
+      undefined,
+      'module',
+      null
+    ),
     null,
-    parseAvroRecord(topRecord, context)
+    null
   );
-  return generate(ast).code;
+  return generate(file).code;
 };
 
-const parseAvroRecord = (avro: AvroRecord, context: Context): t.FlowType => {
+const parseAvroRecord: Parser<AvroRecord> = (
+  avro,
+  names,
+  context
+): t.FlowType => {
   const record = t.objectTypeAnnotation(
     avro.fields.map(field => {
-      return t.objectTypeProperty(
+      const property = t.objectTypeProperty(
         t.stringLiteral(field.name),
-        parseAvroType(field.type, context)
+        parseAvroType(field.type, [...names, avro.name, field.name], context)
       );
+      return property;
     }),
     null,
     null,
@@ -93,8 +128,12 @@ const parseAvroRecord = (avro: AvroRecord, context: Context): t.FlowType => {
   return record;
 };
 
-const parseAvroArray = (avro: AvroArray, context: Context): t.FlowType => {
-  return t.arrayTypeAnnotation(parseAvroType(avro.items, context));
+const parseAvroArray: Parser<AvroArray> = (
+  avro,
+  names,
+  context: Context
+): t.FlowType => {
+  return t.arrayTypeAnnotation(parseAvroType(avro.items, names, context));
 };
 
 interface AvroTypeHandlersMap<T> {
@@ -136,7 +175,7 @@ const handleAvroType = <T>(
   }
 };
 
-const parseAvroEnum = (avro: AvroEnum, context: Context): t.FlowType => {
+const parseAvroEnum: Parser<AvroEnum> = (avro, _, context) => {
   const enumType = t.unionTypeAnnotation(
     avro.symbols.map(symbol => t.stringLiteralTypeAnnotation(symbol))
   );
@@ -144,14 +183,26 @@ const parseAvroEnum = (avro: AvroEnum, context: Context): t.FlowType => {
   return enumType;
 };
 
-const parseAvroType = (avro: AvroType, context: Context): t.FlowType => {
+const parseAvroType: Parser<AvroType> = (avro, names, context) => {
   return handleAvroType(avro, {
     primitive: parseAvroPrimitiveType,
-    union: a => parseAvroUnionType(a, context),
-    record: a => parseAvroRecord(a, context),
-    array: a => parseAvroArray(a, context),
+    union: a => {
+      const parsed = parseAvroUnionType(a, names, context);
+      context.addType([...names, 'Union'], parsed);
+      return parsed;
+    },
+    record: a => {
+      const parsed = parseAvroRecord(a, names, context);
+      context.addType([...names, a.name], parsed);
+      return parsed;
+    },
+    array: a => parseAvroArray(a, names, context),
     custom: a => parseAvroCustomType(a, context),
-    enum: a => parseAvroEnum(a, context),
+    enum: a => {
+      const parsed = parseAvroEnum(a, names, context);
+      context.addType([...names, a.name], parsed);
+      return parsed;
+    },
   });
 };
 
@@ -187,13 +238,14 @@ const parseAvroPrimitiveType = (pt: AvroPrimitiveType): t.FlowType => {
   }
 };
 
-const parseAvroUnionType = (
-  unionTypes: AvroUnion,
-  context: Context
+const parseAvroUnionType: Parser<AvroUnion> = (
+  unionTypes,
+  names,
+  context
 ): t.FlowType => {
   return t.unionTypeAnnotation(
     unionTypes.map(unionType => {
-      const flowType = parseAvroType(unionType, context);
+      const flowType = parseAvroType(unionType, names, context);
       const tag = tagForUnionBranch(unionType);
       if (tag == null) {
         return flowType;
