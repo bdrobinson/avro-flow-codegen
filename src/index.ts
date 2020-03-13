@@ -1,9 +1,22 @@
 import generate from '@babel/generator';
 import * as t from '@babel/types';
 
+const validateAvroCustomName = (string: string) => {
+  const regex = /^[A-Za-z_][A-Za-z0-9_]*$/;
+  if (regex.test(string) === false) {
+    throw new Error(`'${string}' is not a valid avro name`);
+  }
+};
+
 const createTypeName = (names: ReadonlyArray<string>): string => {
   return names
-    .map(name => name.replace(' ', '_').replace('_', ''))
+    .map(name =>
+      name
+        .replace(' ', '_')
+        .split('_')
+        .map(capitaliseFirstLetter)
+        .join('')
+    )
     .map(capitaliseFirstLetter)
     .map(s => s.replace(' ', ''))
     .join('_');
@@ -131,6 +144,7 @@ const parseAvroRecord: Parser<AvroRecord> = (
   context,
   nameOverride
 ): t.FlowType => {
+  validateAvroCustomName(avro.name);
   const name = nameOverride ?? avro.name;
   const record = t.objectTypeAnnotation(
     avro.fields.map(field => {
@@ -200,6 +214,7 @@ const handleAvroType = <T>(
 };
 
 const parseAvroEnum: Parser<AvroEnum> = (avro, _, context) => {
+  validateAvroCustomName(avro.name);
   const enumType = t.unionTypeAnnotation(
     avro.symbols.map(symbol => t.stringLiteralTypeAnnotation(symbol))
   );
@@ -215,9 +230,9 @@ const parseAvroType = (
   return handleAvroType(avro, {
     primitive: parseAvroPrimitiveType,
     union: a => {
-      const typeName = createTypeName(names);
+      const typeName = names.length > 0 ? createTypeName(names) : 'Union';
       const parsed = parseAvroUnionType(a, names, context);
-      context.addType(createTypeName(names), parsed);
+      context.addType(typeName, parsed);
       return t.genericTypeAnnotation(t.identifier(typeName));
     },
     record: a => {

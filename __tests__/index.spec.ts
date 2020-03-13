@@ -39,7 +39,7 @@ test('simple schema works', () => {
   const expected = `
   // @flow
 
-  export type Person_Spousename = null | {|
+  export type Person_SpouseName = null | {|
     string: string
     |}
     export type Pet = {|
@@ -48,10 +48,67 @@ test('simple schema works', () => {
     export type Person = {|
         age: number,
         friends: string[],
-        spouse_name: Person_Spousename,
+        spouse_name: Person_SpouseName,
         favourite_pet: Pet,
         other_pets: Pet[]
     |}
+  `;
+  assert(schema, expected);
+});
+
+test('rejects invalid avro names', () => {
+  const badRecordName = {
+    type: 'record',
+    fields: [],
+    name: 'Some name',
+  };
+  expect(() => parseFile(JSON.stringify(badRecordName))).toThrow(
+    new Error("'Some name' is not a valid avro name")
+  );
+
+  const badEnumName = {
+    type: 'enum',
+    symbols: [],
+    name: '9Enum',
+  };
+  expect(() => parseFile(JSON.stringify(badEnumName))).toThrow(
+    new Error("'9Enum' is not a valid avro name")
+  );
+});
+
+test('supports top level unions', () => {
+  const schema = [
+    {
+      type: 'record',
+      name: 'Person',
+      fields: [{ name: 'age', type: 'int' }],
+    },
+    {
+      type: 'record',
+      name: 'Animal',
+      fields: [{ name: 'species', type: 'string' }],
+    },
+    'string',
+  ];
+  const expected = `
+    // @flow
+
+    export type Person = {|
+      age: number,
+    |}
+    export type Animal = {|
+      species: string
+      |}
+    export type Union =
+      |{|
+        Person: Person
+        |}
+      | {|
+        Animal: Animal
+        |}
+      | {|
+        string: string
+        |}
   `;
   assert(schema, expected);
 });
