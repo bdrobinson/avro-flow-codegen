@@ -13,25 +13,38 @@ const capitaliseFirstLetter = (str: string): string => {
   return str.charAt(0).toUpperCase() + str.slice(1);
 };
 
+// const customType = context.getName(typeName);
+//   if (customType == null) {
+//     throw new Error(`Could not find definition for custom type ${typeName}`);
+//   }
+
 class Context {
   namedTypesByName = new Map<string, t.FlowType>();
   allTypes: Array<[string, t.FlowType]> = [];
-  addName(name: string, type: t.FlowType) {
+  addCustomType(name: string, type: t.FlowType) {
     if (this.namedTypesByName.has(name)) {
       throw new Error(`The named type ${name} has already been declared`);
     }
     this.namedTypesByName.set(name, type);
   }
-  getName(name: string): t.FlowType {
-    const namedType = this.namedTypesByName.get(name);
-    if (namedType == null) {
-      throw new Error(`Named type ${name} has not been declared`);
-    }
-    return namedType;
-  }
 
   addType(name: string, newType: t.FlowType) {
     this.allTypes.push([name, newType]);
+  }
+
+  getFlowNameForAvroCustomName(customAvroName: string): string {
+    const customTypeNode = this.namedTypesByName.get(customAvroName);
+    if (customTypeNode == null) {
+      throw new Error(`Named type ${name} has not been declared`);
+    }
+    const flowNameAndNode = this.allTypes.find(
+      ([_, node]) => node === customTypeNode
+    );
+    if (flowNameAndNode == null) {
+      throw new Error('Logic error – should be impossible');
+    }
+    const [flowName] = flowNameAndNode;
+    return flowName;
   }
 }
 
@@ -132,7 +145,7 @@ const parseAvroRecord: Parser<AvroRecord> = (
     null,
     true
   );
-  context.addName(avro.name, record);
+  context.addCustomType(avro.name, record);
   return record;
 };
 
@@ -190,7 +203,7 @@ const parseAvroEnum: Parser<AvroEnum> = (avro, _, context) => {
   const enumType = t.unionTypeAnnotation(
     avro.symbols.map(symbol => t.stringLiteralTypeAnnotation(symbol))
   );
-  context.addName(avro.name, enumType);
+  context.addCustomType(avro.name, enumType);
   return enumType;
 };
 
@@ -245,11 +258,9 @@ const parseAvroCustomType = (
   typeName: CustomType,
   context: Context
 ): t.FlowType => {
-  const customType = context.getName(typeName);
-  if (customType == null) {
-    throw new Error(`Could not find definition for custom type ${typeName}`);
-  }
-  return customType;
+  return t.genericTypeAnnotation(
+    t.identifier(context.getFlowNameForAvroCustomName(typeName))
+  );
 };
 
 const parseAvroPrimitiveType = (pt: AvroPrimitiveType): t.FlowType => {

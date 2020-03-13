@@ -33,6 +33,7 @@ test('simple schema works', () => {
           fields: [{ name: 'species', type: 'string' }],
         },
       },
+      { name: 'other_pets', type: { type: 'array', items: 'Pet' } },
     ],
   };
   const expected = `
@@ -48,7 +49,8 @@ test('simple schema works', () => {
         age: number,
         friends: string[],
         spouse_name: Person_Spousename,
-        favourite_pet: Pet
+        favourite_pet: Pet,
+        other_pets: Pet[]
     |}
   `;
   assert(schema, expected);
