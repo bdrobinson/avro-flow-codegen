@@ -24,7 +24,21 @@ test('simple schema works', () => {
           items: 'string',
         },
       },
-      { name: 'spouse_name', type: ['null', 'string'] },
+      {
+        name: 'spouse_name',
+        type: [
+          'null',
+          'string',
+          {
+            type: 'record',
+            name: 'FullName',
+            fields: [
+              { name: 'first', type: 'string' },
+              { name: 'second', type: 'string' },
+            ],
+          },
+        ],
+      },
       {
         name: 'favourite_pet',
         type: {
@@ -39,9 +53,18 @@ test('simple schema works', () => {
   const expected = `
   // @flow
 
-  export type Person_SpouseName = null | {|
-    string: string
-    |}
+  export type FullName = {|
+    first: string,
+    second: string
+  |}
+  export type Person_SpouseName = 
+    | null
+    | {|
+      string: string
+      |}
+      | {|
+        FullName: FullName
+      |}
     export type Pet = {|
       species: string
     |}
@@ -111,4 +134,69 @@ test('supports top level unions', () => {
         |}
   `;
   assert(schema, expected);
+});
+
+describe('union simplification', () => {
+  test("doesn't create standalone types for simple nullable unions", () => {
+    const schema = {
+      type: 'record',
+      name: 'Person',
+      fields: [
+        { name: 'spouse_name', type: ['null', 'string'] },
+        {
+          name: 'pet',
+          type: [
+            'null',
+            {
+              type: 'record',
+              name: 'Pet',
+              fields: [{ name: 'age', type: ['null', 'int'] }],
+            },
+          ],
+        },
+      ],
+    };
+    const expected = `
+    // @flow
+
+    export type Pet = {|
+      age: null | {|
+        int: number
+      |},
+    |}
+    export type Person = {|
+      spouse_name: null | {|
+        string: string
+        |},
+      pet: null | {|
+        Pet: Pet
+        |}
+    |}
+  `;
+    assert(schema, expected);
+  });
+
+  test('still creates standalone types for unions with more than 2 types', () => {
+    const schema = {
+      type: 'record',
+      name: 'Person',
+      fields: [{ name: 'age', type: ['null', 'int', 'double'] }],
+    };
+    const expected = `
+    // @flow
+
+    export type Person_Age =
+      | null
+      | {|
+        int: number
+        |}
+      | {|
+        double: number
+        |}
+    export type Person = {|
+      age: Person_Age
+    |}
+  `;
+    assert(schema, expected);
+  });
 });
