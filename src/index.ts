@@ -35,6 +35,10 @@ class Context {
   }
 }
 
+interface Options {
+  topLevelNameOverride?: string;
+}
+
 enum AvroPrimitiveType {
   NULL = 'null',
   BOOLEAN = 'boolean',
@@ -85,14 +89,16 @@ type AvroUnion = Array<AvroType>;
 
 type Parser<T> = (
   a: T,
-  names: ReadonlyArray<string>,
-  context: Context
+  parentNames: ReadonlyArray<string>,
+  context: Context,
+  nameOverride?: string
 ) => t.FlowType;
 
-export const parseFile = (name: string, avscText: string): string => {
+export const parseFile = (avscText: string, options?: Options): string => {
+  const topLevelName = options?.topLevelNameOverride;
   const avro: AvroType = JSON.parse(avscText);
   const context = new Context();
-  parseAvroType(avro, [name], context);
+  parseAvroType(avro, [], context, topLevelName);
   const file = t.file(
     t.program(
       context.allTypes.map(([names, flowType]) =>
@@ -113,14 +119,16 @@ export const parseFile = (name: string, avscText: string): string => {
 
 const parseAvroRecord: Parser<AvroRecord> = (
   avro,
-  names,
-  context
+  parentNames,
+  context,
+  nameOverride
 ): t.FlowType => {
+  const name = nameOverride ?? avro.name;
   const record = t.objectTypeAnnotation(
     avro.fields.map(field => {
       const property = t.objectTypeProperty(
         t.stringLiteral(field.name),
-        parseAvroType(field.type, [...names, avro.name, field.name], context)
+        parseAvroType(field.type, [...parentNames, name, field.name], context)
       );
       return property;
     }),
@@ -136,7 +144,7 @@ const parseAvroRecord: Parser<AvroRecord> = (
 const parseAvroArray: Parser<AvroArray> = (
   avro,
   names,
-  context: Context
+  context
 ): t.FlowType => {
   return t.arrayTypeAnnotation(parseAvroType(avro.items, names, context));
 };
@@ -191,31 +199,38 @@ const parseAvroEnum: Parser<AvroEnum> = (avro, _, context) => {
   return enumType;
 };
 
-const parseAvroType: Parser<AvroType> = (avro, names, context) => {
+const parseAvroType = (
+  avro: AvroType,
+  names: ReadonlyArray<string>,
+  context: Context,
+  nameOverride?: string
+) => {
+  const createName = (str: string): string =>
+    createTypeName([...names, nameOverride ?? str]);
   return handleAvroType(avro, {
     primitive: parseAvroPrimitiveType,
     union: a => {
-      const typeName = createTypeName([...names, 'Union']);
+      const typeName = createName('Union');
       const parsed = parseAvroUnionType(a, names, context);
       context.addType(typeName, parsed);
       return t.genericTypeAnnotation(t.identifier(typeName));
     },
     record: a => {
-      const typeName = createTypeName([...names, a.name]);
-      const parsed = parseAvroRecord(a, names, context);
+      const typeName = createName(a.name);
+      const parsed = parseAvroRecord(a, names, context, nameOverride);
       context.addType(typeName, parsed);
       return t.genericTypeAnnotation(t.identifier(typeName));
     },
     array: a => parseAvroArray(a, names, context),
     custom: a => parseAvroCustomType(a, context),
     enum: a => {
-      const typeName = createTypeName([...names, a.name]);
-      const parsed = parseAvroEnum(a, names, context);
+      const typeName = createName(a.name);
+      const parsed = parseAvroEnum(a, names, context, nameOverride);
       context.addType(typeName, parsed);
       return t.genericTypeAnnotation(t.identifier(typeName));
     },
     map: a => {
-      const typeName = createTypeName([...names, 'Map']);
+      const typeName = createName('Map');
       const parsed = parseAvroMapType(a, names, context);
       context.addType(typeName, parsed);
       return t.genericTypeAnnotation(t.identifier(typeName));
