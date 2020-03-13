@@ -10,8 +10,7 @@
     "start": "tsdx watch",
     "build": "tsdx build && cp types/* dist",
     "test": "tsdx test",
-    "lint": "tsdx lint",
-    "prepare": "tsdx build"
+    "lint": "tsdx lint"
   },
   "peerDependencies": {},
   "husky": {
