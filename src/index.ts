@@ -54,7 +54,12 @@ type CustomType = string;
 
 type AvroType = AvroPrimitive | AvroComplex | CustomType;
 
-type AvroComplex = AvroRecord | AvroArray | AvroUnion | AvroEnum;
+type AvroComplex = AvroRecord | AvroArray | AvroUnion | AvroEnum | AvroMap;
+
+interface AvroMap {
+  type: 'map';
+  values: AvroType;
+}
 
 interface AvroEnum {
   type: 'enum';
@@ -143,6 +148,7 @@ interface AvroTypeHandlersMap<T> {
   union: (_: AvroUnion) => T;
   custom: (_: CustomType) => T;
   enum: (_: AvroEnum) => T;
+  map: (_: AvroMap) => T;
 }
 
 const handleAvroType = <T>(
@@ -169,6 +175,8 @@ const handleAvroType = <T>(
       return handlersMap.array(avro);
     case 'enum':
       return handlersMap.enum(avro);
+    case 'map':
+      return handlersMap.map(avro);
     default:
       // Must be a primitive or custom type
       return handlersMap.primitive(avro.type);
@@ -206,7 +214,26 @@ const parseAvroType: Parser<AvroType> = (avro, names, context) => {
       context.addType(typeName, parsed);
       return t.genericTypeAnnotation(t.identifier(typeName));
     },
+    map: a => {
+      const typeName = createTypeName([...names, 'Map']);
+      const parsed = parseAvroMapType(a, names, context);
+      context.addType(typeName, parsed);
+      return t.genericTypeAnnotation(t.identifier(typeName));
+    },
   });
+};
+
+const parseAvroMapType: Parser<AvroMap> = (avro, names, context) => {
+  return t.objectTypeAnnotation(
+    [],
+    [
+      t.objectTypeIndexer(
+        null,
+        t.stringTypeAnnotation(),
+        parseAvroType(avro.values, names, context)
+      ),
+    ]
+  );
 };
 
 const parseAvroCustomType = (
@@ -273,14 +300,11 @@ const tagForUnionBranch = (avro: AvroType): null | string => {
         return primitive;
       }
     },
-    union: () => {
-      throw new Error('is this even possible?');
-    },
+    union: () => 'union',
     record: r => r.name,
-    array: () => {
-      throw new Error('is this even possible?');
-    },
+    array: () => 'array',
     custom: s => s,
     ['enum']: s => s.name,
+    map: () => 'map',
   });
 };
