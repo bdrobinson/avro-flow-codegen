@@ -27,6 +27,10 @@ const capitaliseFirstLetter = (str: string): string => {
 };
 
 class Context {
+  wrapPrimitives: boolean;
+  constructor(wrapPrimitives: boolean) {
+    this.wrapPrimitives = wrapPrimitives;
+  }
   namedTypesByName = new Map<string, t.FlowType>();
   allTypes: Array<[string, t.FlowType]> = [];
   addCustomType(name: string, type: t.FlowType) {
@@ -111,9 +115,13 @@ type Parser<T, ResultType extends t.FlowType = t.FlowType> = (
   nameOverride?: null | string
 ) => ResultType;
 
-export const parseFile = (avscText: string): string => {
+interface Options {
+  wrapPrimitives: boolean;
+}
+
+export const parseFile = (avscText: string, options?: Options): string => {
   const avro: AvroType = JSON.parse(avscText);
-  const context = new Context();
+  const context = new Context(options?.wrapPrimitives ?? true);
   parseAvroType(avro, [], context);
   const file = t.file(
     t.program(
@@ -230,7 +238,7 @@ const parseAvroType = (
 
       const shouldInline =
         names.length > 0 &&
-        parsed.types.length == 2 &&
+        parsed.types.length === 2 &&
         parsed.types.some(
           branch => branch.type === t.nullLiteralTypeAnnotation().type
         );
@@ -310,28 +318,47 @@ const parseAvroUnionType: Parser<AvroUnion, t.UnionTypeAnnotation> = (
   names,
   context
 ) => {
-  return t.unionTypeAnnotation(
-    unionTypes.map(unionType => {
-      const flowType = parseAvroType(unionType, names, context);
-      const tag = tagForUnionBranch(unionType);
-      if (tag == null) {
-        return flowType;
-      }
-      return t.objectTypeAnnotation(
-        [t.objectTypeProperty(t.identifier(tag), flowType)],
-        null,
-        null,
-        null,
-        true
+  // This is necessary to deduplicate non-wrapped primitives
+  const memberTypeAnnotations: {
+    tagless: Array<t.FlowType>;
+    tagged: Array<t.FlowType>;
+  } = {
+    tagless: [],
+    tagged: [],
+  };
+  for (const unionType of unionTypes) {
+    const flowType = parseAvroType(unionType, names, context);
+    const tag = tagForUnionBranch(unionType, context.wrapPrimitives);
+    if (tag == null) {
+      memberTypeAnnotations.tagless.push(flowType);
+    } else {
+      memberTypeAnnotations.tagged.push(
+        t.objectTypeAnnotation(
+          [t.objectTypeProperty(t.identifier(tag), flowType)],
+          null,
+          null,
+          null,
+          true
+        )
       );
-    })
+    }
+  }
+
+  let uniqueTagless = Array.from(
+    new Map(memberTypeAnnotations.tagless.map(ann => [ann.type, ann])).values()
   );
+  let annotations = uniqueTagless.concat(memberTypeAnnotations.tagged);
+
+  return t.unionTypeAnnotation(annotations);
 };
 
-const tagForUnionBranch = (avro: AvroType): null | string => {
+const tagForUnionBranch = (
+  avro: AvroType,
+  wrapPrimitives: boolean
+): null | string => {
   return handleAvroType<null | string>(avro, {
     primitive: primitive => {
-      if (primitive === 'null') {
+      if (primitive === 'null' || !wrapPrimitives) {
         return null;
       } else {
         return primitive;
@@ -341,7 +368,7 @@ const tagForUnionBranch = (avro: AvroType): null | string => {
     record: r => r.name,
     array: () => 'array',
     custom: s => s,
-    ['enum']: s => s.name,
+    enum: s => s.name,
     map: () => 'map',
   });
 };

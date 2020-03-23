@@ -6,8 +6,8 @@ const format = (file: string): string => {
   return prettier.format(file, { parser: 'babel' });
 };
 
-const assert = (schema: {}, expectedFile: string) => {
-  const parsed = parseFile(JSON.stringify(schema));
+const assert = (schema: {}, expectedFile: string, wrapPrimitives: boolean = true) => {
+  const parsed = parseFile(JSON.stringify(schema), {wrapPrimitives});
   expect(format(parsed)).toBe(format(expectedFile));
 };
 
@@ -199,4 +199,41 @@ describe('union simplification', () => {
   `;
     assert(schema, expected);
   });
+
+  describe("when wrapPrimitives = false", () => {
+
+    test("doesn't wrap primitives in union branches", () => {
+      const schema = {
+        type: 'record',
+        name: 'Person',
+        fields: [{ name: 'age', type: ['null', 'int', 'double', 'string'] }],
+      };
+      const expected = `
+      // @flow
+
+      export type Person_Age =
+        | null | number | string
+      export type Person = {|
+        age: Person_Age
+      |}
+    `;
+      assert(schema, expected, false);
+    })
+
+    test("produces optional types for unions which have only null and a single primitive as a value", () => {
+      const schema = {
+        type: 'record',
+        name: 'Person',
+        fields: [{ name: 'age', type: ['null', 'int', 'double'] }],
+      };
+      const expected = `
+      // @flow
+
+      export type Person = {|
+        age: null | number
+      |}
+    `;
+      assert(schema, expected, false);
+    })
+  })
 });
