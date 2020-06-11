@@ -2,7 +2,7 @@ import generate from '@babel/generator';
 import * as t from '@babel/types';
 
 import * as a from './avro';
-import * as transformers from './transformers';
+import { createFlowTransformer } from './transformers';
 
 const validateAvroCustomName = (string: string) => {
   const regex = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -60,6 +60,7 @@ export const parseFile = (avscText: string, options?: Options): string => {
   const avro: a.AvroType = JSON.parse(avscText);
   const context = new Context(options?.wrapPrimitives ?? true);
   flattenAvroType(avro, [], context);
+  const flowTransformer = createFlowTransformer(context);
   const file = t.file(
     t.program(
       context.allTypes.map(([names, avroType]) =>
@@ -67,7 +68,7 @@ export const parseFile = (avscText: string, options?: Options): string => {
           t.typeAlias(
             t.identifier(names),
             null,
-            transformers.parseAvroType(avroType, context)
+            flowTransformer.transform(avroType)
           )
         )
       ),
