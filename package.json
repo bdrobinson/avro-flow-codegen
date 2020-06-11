@@ -30,14 +30,14 @@
   "devDependencies": {
     "@types/jest": "^25.1.4",
     "@types/prettier": "^1.19.0",
-    "husky": "^4.2.3",
-    "tsdx": "^0.12.3",
-    "tslib": "^1.11.1",
-    "typescript": "^3.8.3"
+    "husky": "^4.2.5",
+    "tsdx": "^0.13.2",
+    "tslib": "^2.0.0",
+    "typescript": "^3.9.5"
   },
   "dependencies": {
-    "@babel/generator": "^7.8.7",
-    "@babel/parser": "^7.8.7",
-    "@babel/types": "^7.8.7"
+    "@babel/generator": "^7.10.2",
+    "@babel/parser": "^7.10.2",
+    "@babel/types": "^7.10.2"
   }
 }
