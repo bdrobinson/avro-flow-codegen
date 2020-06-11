@@ -45,7 +45,7 @@ class Context {
   }
 }
 
-type Visitor<T extends a.AvroType> = (
+type Flattener<T extends a.AvroType> = (
   a: T,
   parentNames: ReadonlyArray<string>,
   context: Context,
@@ -59,7 +59,7 @@ interface Options {
 export const parseFile = (avscText: string, options?: Options): string => {
   const avro: a.AvroType = JSON.parse(avscText);
   const context = new Context(options?.wrapPrimitives ?? true);
-  visitAvroType(avro, [], context);
+  flattenAvroType(avro, [], context);
   const file = t.file(
     t.program(
       context.allTypes.map(([names, avroType]) =>
@@ -82,7 +82,7 @@ export const parseFile = (avscText: string, options?: Options): string => {
   return '// @flow\n\n' + generate(file).code;
 };
 
-const visitAvroRecord: Visitor<a.AvroRecord> = (
+const flattenAvroRecord: Flattener<a.AvroRecord> = (
   avro,
   parentNames,
   context,
@@ -95,7 +95,7 @@ const visitAvroRecord: Visitor<a.AvroRecord> = (
     type: 'record',
     name: avro.name,
     fields: avro.fields.map(field => {
-      const updated = visitAvroType(
+      const updated = flattenAvroType(
         field.type,
         [...parentNames, name, field.name],
         context
@@ -110,10 +110,10 @@ const visitAvroRecord: Visitor<a.AvroRecord> = (
   return avro.name;
 };
 
-const visitAvroArray: Visitor<a.AvroArray> = (avro, names, context) => {
+const flattenAvroArray: Flattener<a.AvroArray> = (avro, names, context) => {
   return {
     type: 'array',
-    items: visitAvroType(avro.items, names, context),
+    items: flattenAvroType(avro.items, names, context),
   };
 };
 
@@ -131,13 +131,13 @@ const isAvroTypeNull = (avro: a.AvroType): boolean => {
   });
 };
 
-const visitAvroEnum: Visitor<a.AvroEnum> = (avro, _, context) => {
+const flattenAvroEnum: Flattener<a.AvroEnum> = (avro, _, context) => {
   validateAvroCustomName(avro.name);
   context.addType(avro.name, avro);
   return avro.name;
 };
 
-const visitAvroType: Visitor<a.AvroType> = (
+const flattenAvroType: Flattener<a.AvroType> = (
   avro: a.AvroType,
   names: ReadonlyArray<string>,
   context: Context
@@ -145,29 +145,29 @@ const visitAvroType: Visitor<a.AvroType> = (
   return a.handleAvroType<a.AvroType>(avro, {
     primitive: a => a,
     union: a => {
-      return visitAvroUnionType(a, names, context);
+      return flattenAvroUnionType(a, names, context);
     },
     record: a => {
-      return visitAvroRecord(a, [], context);
+      return flattenAvroRecord(a, [], context);
     },
-    array: a => visitAvroArray(a, names, context),
+    array: a => flattenAvroArray(a, names, context),
     custom: a => a,
-    enum: a => visitAvroEnum(a, [], context),
-    map: a => visitAvroMapType(a, names, context),
+    enum: a => flattenAvroEnum(a, [], context),
+    map: a => flattenAvroMapType(a, names, context),
   });
 };
 
-const visitAvroMapType: Visitor<a.AvroMap> = (avro, names, context) => {
+const flattenAvroMapType: Flattener<a.AvroMap> = (avro, names, context) => {
   const typeName = createTypeName([...names, 'Map']);
   const updated: a.AvroMap = {
     type: 'map',
-    values: visitAvroType(avro.values, names, context),
+    values: flattenAvroType(avro.values, names, context),
   };
   context.addType(typeName, updated);
   return typeName;
 };
 
-const visitAvroUnionType: Visitor<a.AvroUnion> = (
+const flattenAvroUnionType: Flattener<a.AvroUnion> = (
   unionTypes,
   names,
   context
@@ -180,7 +180,7 @@ const visitAvroUnionType: Visitor<a.AvroUnion> = (
     unionTypes.some(isAvroTypeNull);
 
   const updated = unionTypes.map(unionType =>
-    visitAvroType(unionType, names, context)
+    flattenAvroType(unionType, names, context)
   );
   if (shouldInline) {
     return updated;
