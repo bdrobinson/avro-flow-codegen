@@ -1,3 +1,6 @@
 // @flow
 
-declare export var parseFile: (avscText: string, {| wrapPrimitives: boolean |}) => string;
+declare export var parseFile: (
+  avscText: string,
+  {| wrapPrimitives?: boolean, target: 'flow' | 'typescript' |}
+) => string;
