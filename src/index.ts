@@ -2,7 +2,10 @@ import generate from '@babel/generator';
 import * as t from '@babel/types';
 
 import * as a from './avro';
-import { createFlowTransformer } from './transformers';
+import {
+  createFlowTransformer,
+  createTypescriptTransformer,
+} from './transformers';
 
 const validateAvroCustomName = (string: string) => {
   const regex = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -53,34 +56,50 @@ type Flattener<T extends a.AvroType> = (
 ) => T | a.CustomType;
 
 interface Options {
-  wrapPrimitives: boolean;
+  wrapPrimitives?: boolean;
+  target: 'flow' | 'typescript';
 }
 
-export const parseFile = (avscText: string, options?: Options): string => {
+export const parseFile = (avscText: string, options: Options): string => {
   const avro: a.AvroType = JSON.parse(avscText);
   const context = new Context(options?.wrapPrimitives ?? true);
   flattenAvroType(avro, [], context);
-  const flowTransformer = createFlowTransformer(context);
-  const file = t.file(
-    t.program(
-      context.allTypes.map(([names, avroType]) =>
-        t.exportNamedDeclaration(
-          t.typeAlias(
-            t.identifier(names),
-            null,
-            flowTransformer.transform(avroType)
-          )
-        )
-      ),
-      undefined,
-      'module',
-      null
-    ),
-    null,
-    null
-  );
-  // lol
-  return '// @flow\n\n' + generate(file).code;
+  switch (options.target) {
+    case 'flow': {
+      const transformer = createFlowTransformer(context);
+      const file = t.file(
+        t.program(
+          context.allTypes.map(([names, avroType]) =>
+            t.exportNamedDeclaration(transformer.declaration(names, avroType))
+          ),
+          undefined,
+          'module',
+          null
+        ),
+        null,
+        null
+      );
+      // lol
+      return '// @flow\n\n' + generate(file).code;
+    }
+    case 'typescript': {
+      const transformer = createTypescriptTransformer(context);
+      const file = t.file(
+        t.program(
+          context.allTypes.map(([names, avroType]) =>
+            t.exportNamedDeclaration(transformer.declaration(names, avroType))
+          ),
+          undefined,
+          'module',
+          null
+        ),
+        null,
+        null
+      );
+      // lol
+      return generate(file).code;
+    }
+  }
 };
 
 const flattenAvroRecord: Flattener<a.AvroRecord> = (

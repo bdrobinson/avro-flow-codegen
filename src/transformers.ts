@@ -7,11 +7,11 @@ interface Context {
   isValidCustomType(typeName: string): boolean;
 }
 
-export interface Transformer<T> {
-  transform(avro: a.AvroType): T;
+export interface Transformer {
+  declaration(name: string, avro: a.AvroType): t.Declaration;
 }
 
-abstract class TransformerImpl<T> implements Transformer<T> {
+abstract class TransformerImpl<T> implements Transformer {
   abstract primitive(avro: a.AvroPrimitiveType): T;
   abstract array(avro: a.AvroArray): T;
   abstract record(avro: a.AvroRecord): T;
@@ -19,6 +19,7 @@ abstract class TransformerImpl<T> implements Transformer<T> {
   abstract custom(avro: a.CustomType): T;
   abstract enum(avro: a.AvroEnum): T;
   abstract map(avro: a.AvroMap): T;
+  abstract declaration(name: string, avro: a.AvroType): t.Declaration;
   transform(avro: a.AvroType): T {
     return a.handleAvroType(avro, {
       primitive: a => this.primitive(a),
@@ -32,9 +33,7 @@ abstract class TransformerImpl<T> implements Transformer<T> {
   }
 }
 
-export const createFlowTransformer = (
-  context: Context
-): Transformer<t.FlowType> => {
+export const createFlowTransformer = (context: Context): Transformer => {
   return new FlowTransformer(context);
 };
 
@@ -43,6 +42,9 @@ class FlowTransformer extends TransformerImpl<t.FlowType> {
   constructor(context: Context) {
     super();
     this.context = context;
+  }
+  declaration(name: string, avro: a.AvroType) {
+    return t.typeAlias(t.identifier(name), null, this.transform(avro));
   }
   primitive(pt: a.AvroPrimitiveType) {
     switch (pt) {
@@ -141,6 +143,119 @@ class FlowTransformer extends TransformerImpl<t.FlowType> {
           this.transform(avro.values)
         ),
       ]
+    );
+  }
+}
+
+export const createTypescriptTransformer = (context: Context): Transformer => {
+  return new TypescriptTransformer(context);
+};
+
+class TypescriptTransformer extends TransformerImpl<t.TSType> {
+  context: Context;
+  constructor(context: Context) {
+    super();
+    this.context = context;
+  }
+  declaration(name: string, avro: a.AvroType) {
+    return t.tsTypeAliasDeclaration(
+      t.identifier(name),
+      null,
+      this.transform(avro)
+    );
+  }
+  primitive(pt: a.AvroPrimitiveType) {
+    switch (pt) {
+      case a.AvroPrimitiveType.NULL:
+        return t.tsNullKeyword();
+      case a.AvroPrimitiveType.BOOLEAN:
+        return t.tsBooleanKeyword();
+      case a.AvroPrimitiveType.INT:
+        return t.tsNumberKeyword();
+      case a.AvroPrimitiveType.LONG:
+        return t.tsNumberKeyword();
+      case a.AvroPrimitiveType.FLOAT:
+        return t.tsNumberKeyword();
+      case a.AvroPrimitiveType.DOUBLE:
+        return t.tsNumberKeyword();
+      case a.AvroPrimitiveType.BYTES:
+        throw new Error("Can't handle bytes");
+      case a.AvroPrimitiveType.STRING:
+        return t.tsStringKeyword();
+    }
+  }
+  array(avro: a.AvroArray) {
+    return t.tsArrayType(this.transform(avro.items));
+  }
+
+  record(avro: a.AvroRecord) {
+    const record = t.tsTypeLiteral(
+      avro.fields.map(field => {
+        const property = t.tsPropertySignature(
+          t.stringLiteral(field.name),
+          t.tsTypeAnnotation(this.transform(field.type))
+        );
+        return property;
+      })
+    );
+    return record;
+  }
+
+  union(unionTypes: a.AvroUnion) {
+    // This is necessary to deduplicate non-wrapped primitives
+    const memberTypeAnnotations: {
+      tagless: Array<t.TSType>;
+      tagged: Array<t.TSType>;
+    } = {
+      tagless: [],
+      tagged: [],
+    };
+    for (const unionType of unionTypes) {
+      const tsType = this.transform(unionType);
+      const tag = tagForUnionBranch(unionType, this.context.wrapPrimitives);
+      if (tag == null) {
+        memberTypeAnnotations.tagless.push(tsType);
+      } else {
+        memberTypeAnnotations.tagged.push(
+          t.tsTypeLiteral([
+            t.tsPropertySignature(
+              t.identifier(tag),
+              t.tsTypeAnnotation(tsType)
+            ),
+          ])
+        );
+      }
+    }
+
+    let uniqueTagless = Array.from(
+      new Map(
+        memberTypeAnnotations.tagless.map(ann => [ann.type, ann])
+      ).values()
+    );
+    let annotations = uniqueTagless.concat(memberTypeAnnotations.tagged);
+
+    return t.tsUnionType(annotations);
+  }
+  custom(typeName: a.CustomType): t.TSType {
+    if (this.context.isValidCustomType(typeName) === false) {
+      throw new Error(`${typeName} is not a valid custom type name.`);
+    }
+    return t.tsTypeReference(t.identifier(typeName));
+  }
+
+  enum(avro: a.AvroEnum) {
+    return t.tsUnionType(
+      avro.symbols.map(symbol => t.tsLiteralType(t.stringLiteral(symbol)))
+    );
+  }
+
+  map(avro: a.AvroMap) {
+    return t.tsTypeReference(
+      t.identifier('Record'),
+      t.tsTypeParameterInstantiation([
+        t.tsStringKeyword(),
+        this.transform(avro.values),
+      ])
     );
   }
 }
