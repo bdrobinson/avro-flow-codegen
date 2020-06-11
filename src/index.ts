@@ -2,7 +2,6 @@ import generate from '@babel/generator';
 import * as t from '@babel/types';
 
 import * as a from './avro';
-
 import * as transformers from './transformers';
 
 const validateAvroCustomName = (string: string) => {
@@ -35,41 +34,23 @@ class Context {
   constructor(wrapPrimitives: boolean) {
     this.wrapPrimitives = wrapPrimitives;
   }
-  namedTypesByName = new Map<string, a.AvroType>();
   allTypes: Array<[string, a.AvroType]> = [];
-  addCustomType(name: string, type: a.AvroType) {
-    if (this.namedTypesByName.has(name)) {
-      throw new Error(`The named type ${name} has already been declared`);
-    }
-    this.namedTypesByName.set(name, type);
-  }
 
   addType(name: string, newType: a.AvroType) {
     this.allTypes.push([name, newType]);
   }
 
-  getFlowNameForAvroCustomName(customAvroName: string): string {
-    const customTypeNode = this.namedTypesByName.get(customAvroName);
-    if (customTypeNode == null) {
-      throw new Error(`Named type ${customAvroName} has not been declared`);
-    }
-    const flowNameAndNode = this.allTypes.find(
-      ([_, node]) => node === customTypeNode
-    );
-    if (flowNameAndNode == null) {
-      throw new Error('Logic error – should be impossible');
-    }
-    const [flowName] = flowNameAndNode;
-    return flowName;
+  isValidCustomType(typeName: string): boolean {
+    return new Set(this.allTypes.map(a => a[0])).has(typeName);
   }
 }
 
-type Visitor<T> = (
+type Visitor<T extends a.AvroType> = (
   a: T,
   parentNames: ReadonlyArray<string>,
   context: Context,
   nameOverride?: null | string
-) => void;
+) => T | a.CustomType;
 
 interface Options {
   wrapPrimitives: boolean;
@@ -109,14 +90,31 @@ const visitAvroRecord: Visitor<a.AvroRecord> = (
 ) => {
   validateAvroCustomName(avro.name);
   const name = nameOverride ?? avro.name;
-  avro.fields.forEach(field => {
-    visitAvroType(field.type, [...parentNames, name, field.name], context);
-  });
-  context.addCustomType(avro.name, avro);
+
+  const updated: a.AvroRecord = {
+    type: 'record',
+    name: avro.name,
+    fields: avro.fields.map(field => {
+      const updated = visitAvroType(
+        field.type,
+        [...parentNames, name, field.name],
+        context
+      );
+      return {
+        name: field.name,
+        type: updated,
+      };
+    }),
+  };
+  context.addType(avro.name, updated);
+  return avro.name;
 };
 
 const visitAvroArray: Visitor<a.AvroArray> = (avro, names, context) => {
-  visitAvroType(avro.items, names, context);
+  return {
+    type: 'array',
+    items: visitAvroType(avro.items, names, context),
+  };
 };
 
 const isAvroTypeNull = (avro: a.AvroType): boolean => {
@@ -135,49 +133,38 @@ const isAvroTypeNull = (avro: a.AvroType): boolean => {
 
 const visitAvroEnum: Visitor<a.AvroEnum> = (avro, _, context) => {
   validateAvroCustomName(avro.name);
-  context.addCustomType(avro.name, avro);
+  context.addType(avro.name, avro);
+  return avro.name;
 };
 
-const visitAvroType = (
+const visitAvroType: Visitor<a.AvroType> = (
   avro: a.AvroType,
   names: ReadonlyArray<string>,
   context: Context
 ) => {
-  return a.handleAvroType<void>(avro, {
-    primitive: () => {},
+  return a.handleAvroType<a.AvroType>(avro, {
+    primitive: a => a,
     union: a => {
-      visitAvroUnionType(a, names, context);
-      const typeName = names.length > 0 ? createTypeName(names) : 'Union';
-
-      const shouldInline =
-        names.length > 0 && a.length === 2 && a.some(isAvroTypeNull);
-
-      if (shouldInline) {
-        //
-      } else {
-        context.addType(typeName, a);
-      }
+      return visitAvroUnionType(a, names, context);
     },
     record: a => {
-      visitAvroRecord(a, [], context);
-      context.addType(a.name, a);
+      return visitAvroRecord(a, [], context);
     },
     array: a => visitAvroArray(a, names, context),
-    custom: () => {},
-    enum: a => {
-      visitAvroEnum(a, [], context);
-      context.addType(a.name, a);
-    },
-    map: a => {
-      const typeName = createTypeName([...names, 'Map']);
-      visitAvroMapType(a, names, context);
-      context.addType(typeName, a);
-    },
+    custom: a => a,
+    enum: a => visitAvroEnum(a, [], context),
+    map: a => visitAvroMapType(a, names, context),
   });
 };
 
 const visitAvroMapType: Visitor<a.AvroMap> = (avro, names, context) => {
-  visitAvroType(avro.values, names, context);
+  const typeName = createTypeName([...names, 'Map']);
+  const updated: a.AvroMap = {
+    type: 'map',
+    values: visitAvroType(avro.values, names, context),
+  };
+  context.addType(typeName, updated);
+  return typeName;
 };
 
 const visitAvroUnionType: Visitor<a.AvroUnion> = (
@@ -185,7 +172,20 @@ const visitAvroUnionType: Visitor<a.AvroUnion> = (
   names,
   context
 ) => {
-  for (const unionType of unionTypes) {
-    visitAvroType(unionType, names, context);
+  const typeName = names.length > 0 ? createTypeName(names) : 'Union';
+
+  const shouldInline =
+    names.length > 0 &&
+    unionTypes.length === 2 &&
+    unionTypes.some(isAvroTypeNull);
+
+  const updated = unionTypes.map(unionType =>
+    visitAvroType(unionType, names, context)
+  );
+  if (shouldInline) {
+    return updated;
+  } else {
+    context.addType(typeName, updated);
+    return typeName;
   }
 };

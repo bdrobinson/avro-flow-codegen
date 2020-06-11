@@ -1,18 +1,23 @@
 import prettier from 'prettier';
 
 import { parseFile } from '../src';
+import * as a from '../src/avro';
 
 const format = (file: string): string => {
   return prettier.format(file, { parser: 'babel' });
 };
 
-const assert = (schema: {}, expectedFile: string, wrapPrimitives: boolean = true) => {
-  const parsed = parseFile(JSON.stringify(schema), {wrapPrimitives});
+const assert = (
+  schema: {},
+  expectedFile: string,
+  wrapPrimitives: boolean = true
+) => {
+  const parsed = parseFile(JSON.stringify(schema), { wrapPrimitives });
   expect(format(parsed)).toBe(format(expectedFile));
 };
 
 test('simple schema works', () => {
-  const schema = {
+  const schema: a.AvroType = {
     type: 'record',
     name: 'Person',
     fields: [
@@ -48,6 +53,10 @@ test('simple schema works', () => {
         },
       },
       { name: 'other_pets', type: { type: 'array', items: 'Pet' } },
+      {
+        name: 'some_map',
+        type: { type: 'map', values: 'string' },
+      },
     ],
   };
   const expected = `
@@ -68,12 +77,16 @@ test('simple schema works', () => {
     export type Pet = {|
       species: string
     |}
+    export type Person_SomeMap_Map = {
+      [string]: string
+    }
     export type Person = {|
         age: number,
         friends: string[],
         spouse_name: Person_SpouseName,
         favourite_pet: Pet,
-        other_pets: Pet[]
+        other_pets: Pet[],
+        some_map: Person_SomeMap_Map,
     |}
   `;
   assert(schema, expected);
@@ -96,6 +109,17 @@ test('rejects invalid avro names', () => {
   };
   expect(() => parseFile(JSON.stringify(badEnumName))).toThrow(
     new Error("'9Enum' is not a valid avro name")
+  );
+});
+
+test('rejects unrecognised custom types', () => {
+  const schema: a.AvroType = {
+    type: 'record',
+    name: 'Person',
+    fields: [{ name: 'age', type: 'intt' }],
+  };
+  expect(() => parseFile(JSON.stringify(schema))).toThrow(
+    new Error(`intt is not a valid custom type name.`)
   );
 });
 
@@ -200,8 +224,7 @@ describe('union simplification', () => {
     assert(schema, expected);
   });
 
-  describe("when wrapPrimitives = false", () => {
-
+  describe('when wrapPrimitives = false', () => {
     test("doesn't wrap primitives in union branches", () => {
       const schema = {
         type: 'record',
@@ -218,9 +241,9 @@ describe('union simplification', () => {
       |}
     `;
       assert(schema, expected, false);
-    })
+    });
 
-    test("produces optional types for unions which have only null and a single primitive as a value", () => {
+    test('produces optional types for unions which have only null and a single primitive as a value', () => {
       const schema = {
         type: 'record',
         name: 'Person',
@@ -229,11 +252,12 @@ describe('union simplification', () => {
       const expected = `
       // @flow
 
+      export type Person_Age = null | number
       export type Person = {|
-        age: null | number
+        age: Person_Age
       |}
     `;
       assert(schema, expected, false);
-    })
-  })
+    });
+  });
 });

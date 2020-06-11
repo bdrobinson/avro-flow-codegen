@@ -3,8 +3,8 @@ import * as t from '@babel/types';
 import * as a from './avro';
 
 interface Context {
-  getFlowNameForAvroCustomName(name: string): string;
   wrapPrimitives: boolean;
+  isValidCustomType(typeName: string): boolean;
 }
 
 type Parser<T, ResultType> = (a: T, context: Context) => ResultType;
@@ -79,9 +79,10 @@ const parseAvroCustomType = (
   typeName: a.CustomType,
   context: Context
 ): t.FlowType => {
-  return t.genericTypeAnnotation(
-    t.identifier(context.getFlowNameForAvroCustomName(typeName))
-  );
+  if (context.isValidCustomType(typeName) === false) {
+    throw new Error(`${typeName} is not a valid custom type name.`);
+  }
+  return t.genericTypeAnnotation(t.identifier(typeName));
 };
 
 const parseAvroPrimitiveType = (pt: a.AvroPrimitiveType): t.FlowType => {
