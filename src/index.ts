@@ -1,6 +1,12 @@
 import generate from '@babel/generator';
 import * as t from '@babel/types';
 
+import * as a from './avro';
+import {
+  createFlowTransformer,
+  createTypescriptTransformer,
+} from './transformers';
+
 const validateAvroCustomName = (string: string) => {
   const regex = /^[A-Za-z_][A-Za-z0-9_]*$/;
   if (regex.test(string) === false) {
@@ -31,344 +37,175 @@ class Context {
   constructor(wrapPrimitives: boolean) {
     this.wrapPrimitives = wrapPrimitives;
   }
-  namedTypesByName = new Map<string, t.FlowType>();
-  allTypes: Array<[string, t.FlowType]> = [];
-  addCustomType(name: string, type: t.FlowType) {
-    if (this.namedTypesByName.has(name)) {
-      throw new Error(`The named type ${name} has already been declared`);
-    }
-    this.namedTypesByName.set(name, type);
-  }
+  allTypes: Array<[string, a.AvroType]> = [];
 
-  addType(name: string, newType: t.FlowType) {
+  addType(name: string, newType: a.AvroType) {
     this.allTypes.push([name, newType]);
   }
 
-  getFlowNameForAvroCustomName(customAvroName: string): string {
-    const customTypeNode = this.namedTypesByName.get(customAvroName);
-    if (customTypeNode == null) {
-      throw new Error(`Named type ${customAvroName} has not been declared`);
-    }
-    const flowNameAndNode = this.allTypes.find(
-      ([_, node]) => node === customTypeNode
-    );
-    if (flowNameAndNode == null) {
-      throw new Error('Logic error – should be impossible');
-    }
-    const [flowName] = flowNameAndNode;
-    return flowName;
+  isValidCustomType(typeName: string): boolean {
+    return new Set(this.allTypes.map(a => a[0])).has(typeName);
   }
 }
 
-enum AvroPrimitiveType {
-  NULL = 'null',
-  BOOLEAN = 'boolean',
-  INT = 'int',
-  LONG = 'long',
-  FLOAT = 'float',
-  DOUBLE = 'double',
-  BYTES = 'bytes',
-  STRING = 'string',
-}
-
-const AllAvroPrimitiveTypes = new Set(Object.values(AvroPrimitiveType));
-
-type AvroPrimitive = AvroPrimitiveType | { type: AvroPrimitiveType };
-
-type CustomType = string;
-
-type AvroType = AvroPrimitive | AvroComplex | CustomType;
-
-type AvroComplex = AvroRecord | AvroArray | AvroUnion | AvroEnum | AvroMap;
-
-interface AvroMap {
-  type: 'map';
-  values: AvroType;
-}
-
-interface AvroEnum {
-  type: 'enum';
-  name: string;
-  symbols: Array<string>;
-}
-
-interface AvroRecord {
-  type: 'record';
-  name: string;
-  fields: Array<AvroRecordField>;
-}
-interface AvroRecordField {
-  name: string;
-  type: AvroType;
-}
-
-interface AvroArray {
-  type: 'array';
-  items: AvroType;
-}
-type AvroUnion = Array<AvroType>;
-
-type Parser<T, ResultType extends t.FlowType = t.FlowType> = (
+type Flattener<T extends a.AvroType> = (
   a: T,
   parentNames: ReadonlyArray<string>,
   context: Context,
   nameOverride?: null | string
-) => ResultType;
+) => T | a.CustomType;
 
 interface Options {
-  wrapPrimitives: boolean;
+  wrapPrimitives?: boolean;
+  target: 'flow' | 'typescript';
 }
 
-export const parseFile = (avscText: string, options?: Options): string => {
-  const avro: AvroType = JSON.parse(avscText);
+export const parseFile = (avscText: string, options: Options): string => {
+  const avro: a.AvroType = JSON.parse(avscText);
   const context = new Context(options?.wrapPrimitives ?? true);
-  parseAvroType(avro, [], context);
-  const file = t.file(
-    t.program(
-      context.allTypes.map(([names, flowType]) =>
-        t.exportNamedDeclaration(
-          t.typeAlias(t.identifier(names), null, flowType)
-        )
-      ),
-      undefined,
-      'module',
-      null
-    ),
-    null,
-    null
-  );
-  // lol
-  return '// @flow\n\n' + generate(file).code;
+  flattenAvroType(avro, [], context);
+  switch (options.target) {
+    case 'flow': {
+      const transformer = createFlowTransformer(context);
+      const file = t.file(
+        t.program(
+          context.allTypes.map(([names, avroType]) =>
+            t.exportNamedDeclaration(transformer.declaration(names, avroType))
+          ),
+          undefined,
+          'module',
+          null
+        ),
+        null,
+        null
+      );
+      // lol
+      return '// @flow\n\n' + generate(file).code;
+    }
+    case 'typescript': {
+      const transformer = createTypescriptTransformer(context);
+      const file = t.file(
+        t.program(
+          context.allTypes.map(([names, avroType]) =>
+            t.exportNamedDeclaration(transformer.declaration(names, avroType))
+          ),
+          undefined,
+          'module',
+          null
+        ),
+        null,
+        null
+      );
+      // lol
+      return generate(file).code;
+    }
+  }
 };
 
-const parseAvroRecord: Parser<AvroRecord> = (
+const flattenAvroRecord: Flattener<a.AvroRecord> = (
   avro,
   parentNames,
   context,
   nameOverride
-): t.FlowType => {
+) => {
   validateAvroCustomName(avro.name);
   const name = nameOverride ?? avro.name;
-  const record = t.objectTypeAnnotation(
-    avro.fields.map(field => {
-      const property = t.objectTypeProperty(
-        t.stringLiteral(field.name),
-        parseAvroType(field.type, [...parentNames, name, field.name], context)
+
+  const updated: a.AvroRecord = {
+    type: 'record',
+    name: avro.name,
+    fields: avro.fields.map(field => {
+      const updated = flattenAvroType(
+        field.type,
+        [...parentNames, name, field.name],
+        context
       );
-      return property;
+      return {
+        name: field.name,
+        type: updated,
+      };
     }),
-    null,
-    null,
-    null,
-    true
-  );
-  context.addCustomType(avro.name, record);
-  return record;
+  };
+  context.addType(avro.name, updated);
+  return avro.name;
 };
 
-const parseAvroArray: Parser<AvroArray> = (
-  avro,
-  names,
-  context
-): t.FlowType => {
-  return t.arrayTypeAnnotation(parseAvroType(avro.items, names, context));
+const flattenAvroArray: Flattener<a.AvroArray> = (avro, names, context) => {
+  return {
+    type: 'array',
+    items: flattenAvroType(avro.items, names, context),
+  };
 };
 
-interface AvroTypeHandlersMap<T> {
-  primitive: (_: AvroPrimitiveType) => T;
-  array: (_: AvroArray) => T;
-  record: (_: AvroRecord) => T;
-  union: (_: AvroUnion) => T;
-  custom: (_: CustomType) => T;
-  enum: (_: AvroEnum) => T;
-  map: (_: AvroMap) => T;
-}
-
-const handleAvroType = <T>(
-  avro: AvroType,
-  handlersMap: AvroTypeHandlersMap<T>
-): T => {
-  if (typeof avro === 'string') {
-    // @ts-ignore
-    if (AllAvroPrimitiveTypes.has(avro)) {
-      // @ts-ignore
-      const prim: AvroPrimitiveType = avro;
-      return handlersMap.primitive(prim);
-    } else {
-      // Must be a custom type
-      return handlersMap.custom(avro);
-    }
-  } else if (Array.isArray(avro)) {
-    return handlersMap.union(avro);
-  }
-  switch (avro.type) {
-    case 'record':
-      return handlersMap.record(avro);
-    case 'array':
-      return handlersMap.array(avro);
-    case 'enum':
-      return handlersMap.enum(avro);
-    case 'map':
-      return handlersMap.map(avro);
-    default:
-      // Must be a primitive or custom type
-      return handlersMap.primitive(avro.type);
-  }
-};
-
-const parseAvroEnum: Parser<AvroEnum> = (avro, _, context) => {
-  validateAvroCustomName(avro.name);
-  const enumType = t.unionTypeAnnotation(
-    avro.symbols.map(symbol => t.stringLiteralTypeAnnotation(symbol))
-  );
-  context.addCustomType(avro.name, enumType);
-  return enumType;
-};
-
-const parseAvroType = (
-  avro: AvroType,
-  names: ReadonlyArray<string>,
-  context: Context
-) => {
-  return handleAvroType(avro, {
-    primitive: parseAvroPrimitiveType,
-    union: a => {
-      const typeName = names.length > 0 ? createTypeName(names) : 'Union';
-      const parsed = parseAvroUnionType(a, names, context);
-
-      const shouldInline =
-        names.length > 0 &&
-        parsed.types.length === 2 &&
-        parsed.types.some(
-          branch => branch.type === t.nullLiteralTypeAnnotation().type
-        );
-      if (shouldInline) {
-        return parsed;
-      } else {
-        context.addType(typeName, parsed);
-        return t.genericTypeAnnotation(t.identifier(typeName));
-      }
+const isAvroTypeNull = (avro: a.AvroType): boolean => {
+  return a.handleAvroType<boolean>(avro, {
+    primitive: primitive => {
+      return primitive === a.AvroPrimitiveType.NULL;
     },
-    record: a => {
-      const parsed = parseAvroRecord(a, [], context);
-      context.addType(a.name, parsed);
-      return t.genericTypeAnnotation(t.identifier(a.name));
-    },
-    array: a => parseAvroArray(a, names, context),
-    custom: a => parseAvroCustomType(a, context),
-    enum: a => {
-      const parsed = parseAvroEnum(a, [], context);
-      context.addType(a.name, parsed);
-      return t.genericTypeAnnotation(t.identifier(a.name));
-    },
-    map: a => {
-      const typeName = createTypeName([...names, 'Map']);
-      const parsed = parseAvroMapType(a, names, context);
-      context.addType(typeName, parsed);
-      return t.genericTypeAnnotation(t.identifier(typeName));
-    },
+    array: () => false,
+    record: () => false,
+    union: () => false,
+    custom: () => false,
+    enum: () => false,
+    map: () => false,
   });
 };
 
-const parseAvroMapType: Parser<AvroMap> = (avro, names, context) => {
-  return t.objectTypeAnnotation(
-    [],
-    [
-      t.objectTypeIndexer(
-        null,
-        t.stringTypeAnnotation(),
-        parseAvroType(avro.values, names, context)
-      ),
-    ]
-  );
+const flattenAvroEnum: Flattener<a.AvroEnum> = (avro, _, context) => {
+  validateAvroCustomName(avro.name);
+  context.addType(avro.name, avro);
+  return avro.name;
 };
 
-const parseAvroCustomType = (
-  typeName: CustomType,
+const flattenAvroType: Flattener<a.AvroType> = (
+  avro: a.AvroType,
+  names: ReadonlyArray<string>,
   context: Context
-): t.FlowType => {
-  return t.genericTypeAnnotation(
-    t.identifier(context.getFlowNameForAvroCustomName(typeName))
-  );
+) => {
+  return a.handleAvroType<a.AvroType>(avro, {
+    primitive: a => a,
+    union: a => {
+      return flattenAvroUnionType(a, names, context);
+    },
+    record: a => {
+      return flattenAvroRecord(a, [], context);
+    },
+    array: a => flattenAvroArray(a, names, context),
+    custom: a => a,
+    enum: a => flattenAvroEnum(a, [], context),
+    map: a => flattenAvroMapType(a, names, context),
+  });
 };
 
-const parseAvroPrimitiveType = (pt: AvroPrimitiveType): t.FlowType => {
-  switch (pt) {
-    case AvroPrimitiveType.NULL:
-      return t.nullLiteralTypeAnnotation();
-    case AvroPrimitiveType.BOOLEAN:
-      return t.booleanTypeAnnotation();
-    case AvroPrimitiveType.INT:
-      return t.numberTypeAnnotation();
-    case AvroPrimitiveType.LONG:
-      return t.numberTypeAnnotation();
-    case AvroPrimitiveType.FLOAT:
-      return t.numberTypeAnnotation();
-    case AvroPrimitiveType.DOUBLE:
-      return t.numberTypeAnnotation();
-    case AvroPrimitiveType.BYTES:
-      throw new Error("Can't handle bytes");
-    case AvroPrimitiveType.STRING:
-      return t.stringTypeAnnotation();
-  }
+const flattenAvroMapType: Flattener<a.AvroMap> = (avro, names, context) => {
+  const typeName = createTypeName([...names, 'Map']);
+  const updated: a.AvroMap = {
+    type: 'map',
+    values: flattenAvroType(avro.values, names, context),
+  };
+  context.addType(typeName, updated);
+  return typeName;
 };
 
-const parseAvroUnionType: Parser<AvroUnion, t.UnionTypeAnnotation> = (
+const flattenAvroUnionType: Flattener<a.AvroUnion> = (
   unionTypes,
   names,
   context
 ) => {
-  // This is necessary to deduplicate non-wrapped primitives
-  const memberTypeAnnotations: {
-    tagless: Array<t.FlowType>;
-    tagged: Array<t.FlowType>;
-  } = {
-    tagless: [],
-    tagged: [],
-  };
-  for (const unionType of unionTypes) {
-    const flowType = parseAvroType(unionType, names, context);
-    const tag = tagForUnionBranch(unionType, context.wrapPrimitives);
-    if (tag == null) {
-      memberTypeAnnotations.tagless.push(flowType);
-    } else {
-      memberTypeAnnotations.tagged.push(
-        t.objectTypeAnnotation(
-          [t.objectTypeProperty(t.identifier(tag), flowType)],
-          null,
-          null,
-          null,
-          true
-        )
-      );
-    }
-  }
+  const typeName = names.length > 0 ? createTypeName(names) : 'Union';
 
-  let uniqueTagless = Array.from(
-    new Map(memberTypeAnnotations.tagless.map(ann => [ann.type, ann])).values()
+  const shouldInline =
+    names.length > 0 &&
+    unionTypes.length === 2 &&
+    unionTypes.some(isAvroTypeNull);
+
+  const updated = unionTypes.map(unionType =>
+    flattenAvroType(unionType, names, context)
   );
-  let annotations = uniqueTagless.concat(memberTypeAnnotations.tagged);
-
-  return t.unionTypeAnnotation(annotations);
-};
-
-const tagForUnionBranch = (
-  avro: AvroType,
-  wrapPrimitives: boolean
-): null | string => {
-  return handleAvroType<null | string>(avro, {
-    primitive: primitive => {
-      if (primitive === 'null' || !wrapPrimitives) {
-        return null;
-      } else {
-        return primitive;
-      }
-    },
-    union: () => 'union',
-    record: r => r.name,
-    array: () => 'array',
-    custom: s => s,
-    enum: s => s.name,
-    map: () => 'map',
-  });
+  if (shouldInline) {
+    return updated;
+  } else {
+    context.addType(typeName, updated);
+    return typeName;
+  }
 };
