@@ -9,6 +9,7 @@ interface Context {
 
 export interface Transformer {
   declaration(name: string, avro: a.AvroType): t.Declaration;
+  alias(identifier: string, identToBeAliased: string): t.Declaration;
 }
 
 abstract class TransformerImpl<T> implements Transformer {
@@ -20,6 +21,7 @@ abstract class TransformerImpl<T> implements Transformer {
   abstract enum(avro: a.AvroEnum): T;
   abstract map(avro: a.AvroMap): T;
   abstract declaration(name: string, avro: a.AvroType): t.Declaration;
+  abstract alias(identifier: string, identToBeAliased: string): t.Declaration;
   transform(avro: a.AvroType): T {
     return a.handleAvroType(avro, {
       primitive: a => this.primitive(a),
@@ -42,6 +44,13 @@ class FlowTransformer extends TransformerImpl<t.FlowType> {
   constructor(context: Context) {
     super();
     this.context = context;
+  }
+  alias(identifier: string, identToBeAliased: string): t.Declaration {
+    return t.typeAlias(
+      t.identifier(identifier),
+      null,
+      t.genericTypeAnnotation(t.identifier(identToBeAliased))
+    );
   }
   declaration(name: string, avro: a.AvroType) {
     return t.typeAlias(t.identifier(name), null, this.transform(avro));
@@ -162,6 +171,13 @@ class TypescriptTransformer extends TransformerImpl<t.TSType> {
       t.identifier(name),
       null,
       this.transform(avro)
+    );
+  }
+  alias(identifier: string, identToBeAliased: string): t.Declaration {
+    return t.tsTypeAliasDeclaration(
+      t.identifier(identifier),
+      null,
+      t.tsTypeReference(t.identifier(identToBeAliased))
     );
   }
   primitive(pt: a.AvroPrimitiveType) {

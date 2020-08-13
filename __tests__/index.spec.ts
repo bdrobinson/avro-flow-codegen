@@ -97,6 +97,7 @@ test('simple schema works', () => {
         other_pets: Pet[],
         some_map: Person_SomeMap_Map,
     |}
+    export type __Schema = Person
   `;
 
   const expectedTs = `
@@ -124,6 +125,7 @@ test('simple schema works', () => {
         other_pets: Pet[],
         some_map: Person_SomeMap_Map,
     }
+    export type __Schema = Person
   `;
   assertSuccess(schema, expectedFlow, expectedTs);
 });
@@ -203,6 +205,7 @@ test('supports top level unions', () => {
       | {|
         string: string
         |}
+    export type __Schema = Union
   `;
   const expectedTs = `
     export type Person = {
@@ -221,6 +224,7 @@ test('supports top level unions', () => {
       | {
         string: string
         }
+    export type __Schema = Union
   `;
   assertSuccess(schema, expectedFlow, expectedTs);
 });
@@ -261,6 +265,7 @@ describe('union simplification', () => {
         Pet: Pet
         |}
     |}
+    export type __Schema = Person
   `;
     const expectedTs = `
   export type Pet = {
@@ -276,6 +281,7 @@ describe('union simplification', () => {
       Pet: Pet
       }
   }
+  export type __Schema = Person
 `;
     assertSuccess(schema, expectedFlow, expectedTs);
   });
@@ -300,6 +306,7 @@ describe('union simplification', () => {
     export type Person = {|
       age: Person_Age
     |}
+    export type __Schema = Person
   `;
     const expectedTs = `
   export type Person_Age =
@@ -313,6 +320,7 @@ describe('union simplification', () => {
   export type Person = {
     age: Person_Age
   }
+  export type __Schema = Person
 `;
     assertSuccess(schema, expectedFlow, expectedTs);
   });
@@ -332,6 +340,7 @@ describe('union simplification', () => {
       export type Person = {|
         age: Person_Age
       |}
+    export type __Schema = Person
     `;
 
       const expectedTs = `
@@ -340,6 +349,7 @@ describe('union simplification', () => {
       export type Person = {
         age: Person_Age
       }
+      export type __Schema = Person
     `;
       assertSuccess(schema, expectedFlow, expectedTs, false);
     });
@@ -357,12 +367,14 @@ describe('union simplification', () => {
       export type Person = {|
         age: Person_Age
       |}
+      export type __Schema = Person
     `;
       const expectedTs = `
       export type Person_Age = null | number
       export type Person = {
         age: Person_Age
       }
+      export type __Schema = Person
     `;
       assertSuccess(schema, expectedFlow, expectedTs, false);
     });

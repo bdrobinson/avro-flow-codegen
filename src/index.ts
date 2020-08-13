@@ -67,11 +67,15 @@ export const parseFile = (avscText: string, options: Options): string => {
   switch (options.target) {
     case 'flow': {
       const transformer = createFlowTransformer(context);
+      const last = getLast(context.allTypes);
       const file = t.file(
         t.program(
-          context.allTypes.map(([names, avroType]) =>
-            t.exportNamedDeclaration(transformer.declaration(names, avroType))
-          ),
+          [
+            ...context.allTypes.map(([names, avroType]) =>
+              t.exportNamedDeclaration(transformer.declaration(names, avroType))
+            ),
+            t.exportNamedDeclaration(transformer.alias('__Schema', last[0])),
+          ],
           undefined,
           'module',
           null
@@ -84,11 +88,15 @@ export const parseFile = (avscText: string, options: Options): string => {
     }
     case 'typescript': {
       const transformer = createTypescriptTransformer(context);
+      const last = getLast(context.allTypes);
       const file = t.file(
         t.program(
-          context.allTypes.map(([names, avroType]) =>
-            t.exportNamedDeclaration(transformer.declaration(names, avroType))
-          ),
+          [
+            ...context.allTypes.map(([names, avroType]) =>
+              t.exportNamedDeclaration(transformer.declaration(names, avroType))
+            ),
+            t.exportNamedDeclaration(transformer.alias('__Schema', last[0])),
+          ],
           undefined,
           'module',
           null
@@ -208,4 +216,13 @@ const flattenAvroUnionType: Flattener<a.AvroUnion> = (
     context.addType(typeName, updated);
     return typeName;
   }
+};
+
+const getLast = <T>(arr: ReadonlyArray<T>): T => {
+  const length = arr.length;
+  if (length === 0) {
+    throw new Error('Cannot get last of empty array');
+  }
+  const last = arr[length - 1];
+  return last;
 };
